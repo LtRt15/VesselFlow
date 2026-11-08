@@ -1,6 +1,8 @@
 import streamlit as st
 from datetime import datetime, timedelta
 import os
+import pandas as pd
+from streamlit_gsheets import GSheetsConnection
 
 # -----------------------------------------------------------------------------
 # 1. PAGE CONFIG & CUSTOM STYLING (NAVY THEME & SEAMLESS LOGO BLEND)
@@ -67,8 +69,57 @@ CUSTOM_CSS = """
 st.markdown(CUSTOM_CSS, unsafe_allow_html=True)
 
 # Initialize session memory states
-if "vessels" not in st.session_state:
-    st.session_state.vessels = []
+# -----------------------------------------------------------------------------
+# GOOGLE SHEETS DATA PERSISTENCE LAYER
+# -----------------------------------------------------------------------------
+conn = st.connection("gsheets", type=GSheetsConnection)
+
+def load_vessels_from_gsheets():
+    try:
+        df = conn.read(ttl=0)
+        if df is not None and not df.empty:
+            df = df.fillna("")
+            records = df.to_dict(orient="records")
+            bool_keys = [
+                "inbound_ordered", "following_vessel", "shifting_ordered", 
+                "departure_pilot_ordered", "enoa_filed", "form_3171", "tpe_called_in", 
+                "entrance_filed", "cbp_payment_done", "clearance_filed", "receipt_sent", 
+                "bl_signed", "sof_sent", "survey_sent", "spo_turned_in", 
+                "cbp_complete_turned_in", "gate_list_submitted", "berth_app_submitted", 
+                "coc_required", "coc_performance_driven", "coc_cargo_waiver_requested", 
+                "coc_cargo_waiver_approved", "coc_complete", "crew_change_enabled", 
+                "bunker_enabled", "bunker_boom_needed", "bunker_surveyor_needed", 
+                "packages_enabled", "ctm_enabled", "ctm_funds_received", "ctm_funds_sent", 
+                "launch_enabled", "vendor_del_enabled", "attendance_enabled"
+            ]
+            for r in records:
+                for bk in bool_keys:
+                    if bk in r:
+                        r[bk] = True if str(r[bk]).lower() in ["true", "1", "yes"] else False
+            return records
+    except Exception as e:
+        st.error(f"Error loading from Google Sheets: {e}")
+    return []
+
+def save_all_vessels_to_gsheets(vessels_list):
+    try:
+        if vessels_list:
+            df = pd.DataFrame(vessels_list)
+        else:
+            df = pd.DataFrame()
+        conn.update(data=df)
+        st.cache_data.clear()
+    except Exception as e:
+        st.error(f"Error saving to Google Sheets: {e}")
+
+if "vessels" not in st.session_state or not st.session_state.vessels:
+    st.session_state.vessels = load_vessels_from_gsheets()
+
+if "navigation" not in st.session_state:
+    st.session_state.navigation = "dashboard"
+
+if "selected_index" not in st.session_state:
+    st.session_state.selected_index = None
 
 if "navigation" not in st.session_state:
     st.session_state.navigation = "dashboard"
@@ -426,13 +477,14 @@ if st.session_state.navigation == "detail":
     col_nav1, col_nav2 = st.columns([6, 1])
     with col_nav1:
         if st.button("← Back to Dashboard"):
+            save_all_vessels_to_gsheets(st.session_state.vessels) # <-- Add this line here
             st.session_state.navigation = "dashboard"
             st.rerun()
     with col_nav2:
         if st.button("🗑️ Delete Vessel", type="secondary"):
             st.session_state.vessels.pop(idx)
+            save_all_vessels_to_gsheets(st.session_state.vessels) # <-- Add this line
             st.session_state.navigation = "dashboard"
-            st.success("Vessel deleted successfully.")
             st.rerun()
             
     st.write("---")
@@ -961,6 +1013,7 @@ else:
                             "crew_change_notes": "", "bunker_notes": "", "package_notes": "", "ctm_notes": "", "custom_service_notes": ""
                         }
                         st.session_state.vessels.append(new_vessel)
+                        save_all_vessels_to_gsheets(st.session_state.vessels) # <-- Add this line
                         st.success(f"Successfully logged **{v_name}**!")
                         st.rerun()
                     else:
