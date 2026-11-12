@@ -554,10 +554,10 @@ if st.session_state.navigation == "changelog":
     
     st.markdown("### 🚀 Version 0.7.1 (Current Sprint)")
     st.markdown("""
-    * **Smart Decimal Protection (`.0`):** Implemented global `clean_number_val` normalization site-wide to strip database-added `.0` whole-number artifacts while strictly preserving genuine user-entered decimals[cite: 8].
-    * **Time Formatting & Preservation:** Upgraded `auto_format_datetime` to correctly parse and preserve full `HH:MM` time strings without truncating trailing zeros[cite: 5].
-    * **Port Services Stability:** Added robust `isinstance` list/dictionary guards and type-casting across all crew members and vendor/supplier lists to eliminate `AttributeError` crashes[cite: 10].
-    * **Automated Google Sheets Schema Sync:** Upgraded the load/save database engine to auto-expand Google Sheet column headers and securely serialize nested lists (e.g., crew members, bunker quantities, vendor deliveries) to JSON text strings[cite: 7].
+    * **Smart Decimal Protection (`.0`):** Implemented global `clean_number_val` normalization site-wide to strip database-added `.0` whole-number artifacts while strictly preserving genuine user-entered decimals.
+    * **Time Formatting & Preservation:** Upgraded `auto_format_datetime` to correctly parse and preserve full `HH:MM` time strings without truncating trailing zeros.
+    * **Port Services Stability:** Added robust `isinstance` list/dictionary guards and type-casting across all crew members and vendor/supplier lists to eliminate `AttributeError` crashes.
+    * **Automated Google Sheets Schema Sync:** Upgraded the load/save database engine to auto-expand Google Sheet column headers and securely serialize nested lists (e.g., crew members, bunker quantities, vendor deliveries) to JSON text strings.
     * **Compliance Check Persistence:** Fixed checkbox retention on page reloads by linking explicit state reads/writes with auto-saving triggers.
     * **Clean Initial State:** Configured new vessel forms and selectboxes to start completely blank (with appropriate defaults for Agent Type and Dimension Units).
     """)
@@ -567,7 +567,46 @@ if st.session_state.navigation == "changelog":
     st.markdown("""
     * Established Streamlit Cloud backend with Google Sheets (`VesselFlow_DB`) persistent data storage.
     * Implemented Sabine Pilots daylight restriction compliance engine (checking LOA, Beam, and DWT thresholds against nighttime transits).
-    * Added automated Weekend Handover report generator.
+    * Added automated Weekend Handover report generator. **WIP**
+    * Published system to the web for live OTJ testing and feedback.
+    """)
+
+    st.markdown("---")
+    st.markdown("### 📋 Version 0.6.0")
+    st.markdown("""
+    * Introduced the core vessel details view with structured categorization across General, Navigation, Cargo, Compliance, and Port Services tabs.
+    * Integrated dynamic input fields for tracking incoming/outgoing clearances and CBP documentation requirements.
+    """)
+
+    st.markdown("---")
+    st.markdown("### 🛠️ Version 0.5.0")
+    st.markdown("""
+    * Built the initial sidebar navigation framework with top-level view routing (`dashboard`, `detail`, `changelog`).
+    * Established local environment configuration using Streamlit secrets management (`secrets.toml`).
+    """)
+
+    st.markdown("---")
+    st.markdown("### 📐 Version 0.4.0")
+    st.markdown("""
+    * Implemented core vessel tracking metrics, data grids, and state management dictionaries for active port calls.
+    """)
+
+    st.markdown("---")
+    st.markdown("### 🏗️ Version 0.3.0")
+    st.markdown("""
+    * Initial architectural prototype establishing data structures for vessel identification, registry details, and port agent assignments.
+    """)
+
+    st.markdown("---")
+    st.markdown("### 🧱 Version 0.2.0")
+    st.markdown("""
+    * Core layout design and multi-tab interface scaffolding for operational data entry.
+    """)
+
+    st.markdown("---")
+    st.markdown("### 🌱 Version 0.0.0 (Genesis)")
+    st.markdown("""
+    * Initial project scaffolding and local environment setup.
     """)
 
 # -----------------------------------------------------------------------------
