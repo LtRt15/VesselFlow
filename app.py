@@ -3,7 +3,7 @@ from datetime import datetime, timedelta
 import os
 import pandas as pd
 from streamlit_gsheets import GSheetsConnection
-
+import json
 # -----------------------------------------------------------------------------
 # 1. PAGE CONFIG & CUSTOM STYLING (NAVY THEME & SEAMLESS LOGO BLEND)
 # -----------------------------------------------------------------------------
@@ -74,39 +74,107 @@ st.markdown(CUSTOM_CSS, unsafe_allow_html=True)
 # -----------------------------------------------------------------------------
 conn = st.connection("gsheets", type=GSheetsConnection)
 
+# Helper: Strips system-added .0 from whole numbers while preserving user-entered decimals site-wide
+def clean_number_val(val):
+    if val is None:
+        return ""
+    val_str = str(val).strip()
+    # Skip cleaning if it's a date or time string to preserve leading zeros (e.g., 01:00)
+    if ":" in val_str or "/" in val_str:
+        return val_str
+        
+    if isinstance(val, float):
+        return str(int(val)) if val.is_integer() else str(val)
+    if isinstance(val, int):
+        return str(val)
+    
+    if not val_str:
+        return ""
+    try:
+        f_val = float(val_str)
+        if f_val.is_integer():
+            return str(int(f_val))
+        else:
+            return val_str
+    except ValueError:
+        return val_str
+    
+# Master list of keys that store lists/dicts (serialized as JSON in Google Sheets)
+JSON_KEYS = [
+    "crew_members", "bunker_nom_list", "bunker_act_list", 
+    "launch_vendors", "vd_vendors", "attendees"
+]
+
+BOOL_KEYS = [
+    "inbound_ordered", "following_vessel", "shifting_ordered", 
+    "departure_pilot_ordered", "outbound_pilot_confirmed", "enoa_filed", "form_3171", "tpe_called_in", 
+    "entrance_filed", "cbp_payment_done", "clearance_filed", "receipt_sent", 
+    "bl_signed", "sof_sent", "survey_sent", "spo_turned_in", 
+    "cbp_complete_turned_in", "gate_list_submitted", "berth_app_submitted", 
+    "coc_required", "coc_performance_driven", "coc_cargo_waiver_requested", 
+    "coc_cargo_waiver_approved", "coc_complete", "crew_change_enabled", 
+    "bunker_enabled", "bunker_boom_needed", "bunker_surveyor_needed", 
+    "packages_enabled", "ctm_enabled", "ctm_funds_received", "ctm_funds_sent", 
+    "launch_enabled", "vendor_del_enabled", "attendance_enabled"
+]
+
 def load_vessels_from_gsheets():
     try:
         df = conn.read(ttl=0)
         if df is not None and not df.empty:
             df = df.fillna("")
             records = df.to_dict(orient="records")
-            bool_keys = [
-                "inbound_ordered", "following_vessel", "shifting_ordered", 
-                "departure_pilot_ordered", "enoa_filed", "form_3171", "tpe_called_in", 
-                "entrance_filed", "cbp_payment_done", "clearance_filed", "receipt_sent", 
-                "bl_signed", "sof_sent", "survey_sent", "spo_turned_in", 
-                "cbp_complete_turned_in", "gate_list_submitted", "berth_app_submitted", 
-                "coc_required", "coc_performance_driven", "coc_cargo_waiver_requested", 
-                "coc_cargo_waiver_approved", "coc_complete", "crew_change_enabled", 
-                "bunker_enabled", "bunker_boom_needed", "bunker_surveyor_needed", 
-                "packages_enabled", "ctm_enabled", "ctm_funds_received", "ctm_funds_sent", 
-                "launch_enabled", "vendor_del_enabled", "attendance_enabled"
-            ]
+            cleaned_records = []
             for r in records:
-                for bk in bool_keys:
-                    if bk in r:
-                        r[bk] = True if str(r[bk]).lower() in ["true", "1", "yes"] else False
-            return records
+                cleaned_r = {}
+                for k, val in r.items():
+                    if k in BOOL_KEYS:
+                        cleaned_r[k] = str(val).strip().lower() in ["true", "1", "1.0", "yes"]
+                    elif k in JSON_KEYS:
+                        if isinstance(val, str) and val.strip():
+                            try:
+                                cleaned_r[k] = json.loads(val)
+                            except Exception:
+                                cleaned_r[k] = []
+                        elif isinstance(val, list):
+                            cleaned_r[k] = val
+                        else:
+                            cleaned_r[k] = []
+                    else:
+                        cleaned_r[k] = clean_number_val(val)
+                cleaned_records.append(cleaned_r)
+            return cleaned_records
     except Exception as e:
         st.error(f"Error loading from Google Sheets: {e}")
     return []
 
 def save_all_vessels_to_gsheets(vessels_list):
     try:
-        if vessels_list:
-            df = pd.DataFrame(vessels_list)
-        else:
-            df = pd.DataFrame()
+        if not vessels_list:
+            conn.update(data=pd.DataFrame())
+            st.cache_data.clear()
+            return
+
+        all_keys = set(BOOL_KEYS) | set(JSON_KEYS)
+        for bk in BOOL_KEYS:
+            all_keys.add(f"{bk}_date")
+        for v in vessels_list:
+            all_keys.update(v.keys())
+
+        normalized_rows = []
+        for v in vessels_list:
+            row = {}
+            for k in sorted(all_keys):
+                val = v.get(k, False if k in BOOL_KEYS else "")
+                if k in JSON_KEYS:
+                    row[k] = json.dumps(val) if isinstance(val, (list, dict)) else "[]"
+                elif k in BOOL_KEYS:
+                    row[k] = bool(val)
+                else:
+                    row[k] = clean_number_val(val)
+            normalized_rows.append(row)
+
+        df = pd.DataFrame(normalized_rows)
         conn.update(data=df)
         st.cache_data.clear()
     except Exception as e:
@@ -137,14 +205,19 @@ if "show_handover" not in st.session_state:
 def auto_format_datetime(val):
     if not val:
         return ""
-    nums = "".join(filter(str.isdigit, val))
+    nums = "".join(filter(str.isdigit, str(val)))
     if len(nums) >= 8:
-        m, d, y, h, min_t = nums[0:2], nums[2:4], nums[4:8], nums[8:10], nums[10:12]
+        m, d, y = nums[0:2], nums[2:4], nums[4:8]
         formatted = f"{m}/{d}/{y}"
-        if h:
+        if len(nums) >= 10:
+            h = nums[8:10]
             formatted += f" {h}"
-            if min_t:
+            if len(nums) >= 12:
+                min_t = nums[10:12]
                 formatted += f":{min_t}"
+            elif len(nums) == 11:
+                min_t = nums[10:11]
+                formatted += f":{min_t}0"
         return formatted
     return val
 
@@ -467,10 +540,42 @@ def generate_handover_text(vessels):
         
     return "\n".join(output)
 
+# ==========================================
+# VIEW 3: SYSTEM CHANGE LOG
+# ==========================================
+if st.session_state.navigation == "changelog":
+    if st.button("← Back to Dashboard"):
+        st.session_state.navigation = "dashboard"
+        st.rerun()
+        
+    st.write("---")
+    st.title("📜 Cleat VMS System Change Log")
+    st.markdown("Tracking system updates, schema migrations, and operational patches as the program runs live.")
+    
+    st.markdown("### 🚀 Version 0.7.1 (Current Sprint)")
+    st.markdown("""
+    * **Smart Decimal Protection (`.0`):** Implemented global `clean_number_val` normalization site-wide to strip database-added `.0` whole-number artifacts while strictly preserving genuine user-entered decimals[cite: 8].
+    * **Time Formatting & Preservation:** Upgraded `auto_format_datetime` to correctly parse and preserve full `HH:MM` time strings without truncating trailing zeros[cite: 5].
+    * **Port Services Stability:** Added robust `isinstance` list/dictionary guards and type-casting across all crew members and vendor/supplier lists to eliminate `AttributeError` crashes[cite: 10].
+    * **Automated Google Sheets Schema Sync:** Upgraded the load/save database engine to auto-expand Google Sheet column headers and securely serialize nested lists (e.g., crew members, bunker quantities, vendor deliveries) to JSON text strings[cite: 7].
+    * **Compliance Check Persistence:** Fixed checkbox retention on page reloads by linking explicit state reads/writes with auto-saving triggers.
+    * **Clean Initial State:** Configured new vessel forms and selectboxes to start completely blank (with appropriate defaults for Agent Type and Dimension Units).
+    """)
+    
+    st.markdown("---")
+    st.markdown("### 🛠️ Version 0.7.0")
+    st.markdown("""
+    * Established Streamlit Cloud backend with Google Sheets (`VesselFlow_DB`) persistent data storage.
+    * Implemented Sabine Pilots daylight restriction compliance engine (checking LOA, Beam, and DWT thresholds against nighttime transits).
+    * Added automated Weekend Handover report generator.
+    """)
+
+# -----------------------------------------------------------------------------
+
 # -----------------------------------------------------------------------------
 # VIEW 1: VESSEL DETAIL PAGE (Full Info & Editing)
 # -----------------------------------------------------------------------------
-if st.session_state.navigation == "detail":
+elif st.session_state.navigation == "detail":
     idx = st.session_state.selected_index
     v = st.session_state.vessels[idx]
     
@@ -540,7 +645,7 @@ if st.session_state.navigation == "detail":
 
         col_a, col_b = st.columns(2)
         with col_a:
-            v['imo'] = st.text_input("IMO Number", value=v.get('imo', ''), key=f"imo_{idx}")
+            v['imo'] = st.text_input("IMO Number", value=str(v.get('imo', '')).replace('.0', ''), key=f"imo_{idx}", placeholder="")
             v['flag'] = st.text_input("Flag", value=v.get('flag', ''), key=f"flag_{idx}")
             v['call_sign'] = st.text_input("Call Sign", value=v.get('call_sign', ''), key=f"cs_{idx}")
         with col_b:
@@ -589,7 +694,9 @@ if st.session_state.navigation == "detail":
         with tg1:
             v['tug_company'] = st.selectbox("Tug Company", ["None", "Moran Towing", "Bay Towing"], index=["None", "Moran Towing", "Bay Towing"].index(v.get('tug_company', 'None')) if v.get('tug_company', 'None') in ["None", "Moran Towing", "Bay Towing"] else 0, key=f"tc_{idx}")
         with tg2:
-            v['tug_billing'] = st.selectbox("Tug Billing Type", ["Nominated", "Direct Bill"], index=0 if v.get('tug_billing', 'Nominated') == 'Nominated' else 1, key=f"tb_{idx}")
+            tb_opts = ["", "Nominated", "Direct Bill"]
+            curr_tb = v.get('tug_billing', '')
+            v['tug_billing'] = st.selectbox("Tug Billing Type", tb_opts, index=tb_opts.index(curr_tb) if curr_tb in tb_opts else 0, key=f"tb_{idx}")
             
         st.write("---")
         st.subheader("Pilot Orders & Routing")
@@ -598,7 +705,7 @@ if st.session_state.navigation == "detail":
         v['inbound_ordered'] = st.checkbox("Inbound Pilots Ordered", value=v.get('inbound_ordered', False), key=f"in_ord_{idx}")
         
         if v['inbound_ordered']:
-            ib_dest_options = ["Berth", "Layberth", "Inshore Anchorage"]
+            ib_dest_options = ["", "Berth", "Layberth", "Inshore Anchorage"]
             curr_ib_dest = v.get('inbound_dest', 'Berth')
             v['inbound_dest'] = st.selectbox("Destination", ib_dest_options, index=ib_dest_options.index(curr_ib_dest) if curr_ib_dest in ib_dest_options else 0, key=f"ib_dest_sel_{idx}")
 
@@ -704,21 +811,34 @@ if st.session_state.navigation == "detail":
     # SECTION 6: Port Services & Vendors
     with st.expander("🛠️ Port Services & Vendors", expanded=True):
         
+        # Safe list initializations to prevent AttributeErrors
+        if not isinstance(v.get("crew_members"), list):
+            v["crew_members"] = [{"rank": "", "name": "", "flight": ""}]
+        if not isinstance(v.get("bunker_nom_list"), list):
+            v["bunker_nom_list"] = [{"type": "", "qty": ""}]
+        if not isinstance(v.get("bunker_act_list"), list):
+            v["bunker_act_list"] = [{"qty": "", "type": ""}]
+        if not isinstance(v.get("launch_vendors"), list):
+            v["launch_vendors"] = [{"vendor": "", "pallets": ""}]
+        if not isinstance(v.get("vd_vendors"), list):
+            v["vd_vendors"] = [{"vendor": "", "pallets": "", "deliver_to_launch": False, "gate_list_received": False}]
+        if not isinstance(v.get("attendees"), list):
+            v["attendees"] = [{"name": "", "company": "", "gate_list_info_rec": False}]
+
         # 1. Crew Change
         v["crew_change_enabled"] = st.checkbox("Crew Change", value=v.get("crew_change_enabled", False), key=f"cc_en_{idx}")
         if v["crew_change_enabled"]:
-            if "crew_members" not in v:
-                v["crew_members"] = [{"rank": "", "name": "", "flight": ""}]
-            
             st.markdown("##### Crew Members Listing")
             for c_idx, member in enumerate(v.get("crew_members", [])):
+                if not isinstance(member, dict):
+                    continue
                 rc1, rc2, rc3, rc4 = st.columns([1.5, 2, 2, 0.6])
                 with rc1:
-                    member["rank"] = st.text_input(f"Rank {c_idx+1}", value=member.get("rank", ""), key=f"cr_rank_{idx}_{c_idx}")
+                    member["rank"] = st.text_input("Rank", value=str(member.get("rank", "")), key=f"cr_rank_{idx}_{c_idx}")
                 with rc2:
-                    member["name"] = st.text_input(f"Name {c_idx+1}", value=member.get("name", ""), key=f"cr_name_{idx}_{c_idx}")
+                    member["name"] = st.text_input("Name", value=str(member.get("name", "")), key=f"cr_name_{idx}_{c_idx}")
                 with rc3:
-                    member["flight"] = st.text_input(f"Flight Details {c_idx+1}", value=member.get("flight", ""), key=f"cr_flight_{idx}_{c_idx}")
+                    member["flight"] = st.text_input("Flight", value=str(member.get("flight", "")), key=f"cr_flight_{idx}_{c_idx}")
                 with rc4:
                     st.write("")
                     st.write("")
@@ -730,7 +850,7 @@ if st.session_state.navigation == "detail":
                 v["crew_members"].append({"rank": "", "name": "", "flight": ""})
                 st.rerun()
             
-            v["crew_change_notes"] = st.text_input("Additional Crew Change Notes", value=v.get("crew_change_notes", ""), key=f"cc_notes_{idx}")
+            v["crew_change_notes"] = st.text_input("Additional Crew Change Notes", value=str(v.get("crew_change_notes", "")), key=f"cc_notes_{idx}")
 
         st.divider()
 
@@ -991,8 +1111,8 @@ else:
                             "etb": "", "atb": "",
                             "etc": "", "atc": "",
                             "etd": "", "atd": "",
-                            "tug_company": "None", "tug_billing": "Nominated",
-                            "inbound_ordered": False, "inbound_dest": "Berth",
+                            "tug_company": "None", "tug_billing": "",
+                            "inbound_ordered": False, "inbound_dest": "",
                             "ib_basis": "Specific Time", "inbound_pilot_time": "",
                             "following_vessel": False, "following_vessel_name": "", "following_movement_date": "",
                             "layberth_ordered_by": "Terminal", "layberth_name": "", "layberth_reason": "Pre-Stage",
@@ -1025,6 +1145,11 @@ else:
             if st.session_state.get("show_handover_panel", False):
                 handover_txt = generate_handover_text(st.session_state.vessels)
                 st.text_area("Copy Handover:", value=handover_txt, height=250)
+
+        st.write("---")
+        if st.button("📜 System Change Log", use_container_width=True):
+            st.session_state.navigation = "changelog"
+            st.rerun()
 
     # Dashboard Header: Centered Logo Image
     col_l1, col_l2, col_l3 = st.columns([1, 1.5, 1])
